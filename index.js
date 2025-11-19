@@ -7,56 +7,42 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Simple in-memory rules
-const FREE_DOMAINS = [
-  "gmail.com",
-  "yahoo.com",
-  "hotmail.com",
-  "outlook.com",
-  "icloud.com"
-];
+// Rules
+const FREE_DOMAINS = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"];
+const DISPOSABLE_DOMAINS = ["mailinator.com", "10minutemail.com", "guerrillamail.com"];
+const NON_BUSINESS_TITLES = ["student", "teacher", "personal", "self", "none", "n/a"];
+const ROLE_BASED_LOCAL_PARTS = ["info", "support", "admin", "sales", "contact", "hello", "hi"];
 
-const DISPOSABLE_DOMAINS = [
-  "mailinator.com",
-  "10minutemail.com",
-  "guerrillamail.com"
-];
+function safe(value, defaultValue = "") {
+  return (value ?? defaultValue).toString().trim();
+}
 
-const NON_BUSINESS_TITLES = [
-  "student",
-  "teacher",
-  "personal",
-  "self",
-  "none",
-  "n/a"
-];
-
-const ROLE_BASED_LOCAL_PARTS = [
-  "info",
-  "support",
-  "admin",
-  "sales",
-  "contact",
-  "hello",
-  "hi"
-];
+function toLower(value) {
+  return safe(value).toLowerCase();
+}
 
 function classifyLead(lead) {
   const reasons = [];
 
-  const email = (lead.email || "").toLowerCase().trim();
-  const jobTitle = (lead.jobTitle || "").toLowerCase().trim();
-  const company = (lead.company || "").trim();
-  const country = (lead.country || "").trim();
-  const ipCountry = (lead.ipCountry || "").trim();
-  const firstName = (lead.firstName || "").toLowerCase().trim();
-  const lastName = (lead.lastName || "").toLowerCase().trim();
+  // Safe extraction of fields
+  const email = toLower(lead.email);
+  const firstName = toLower(lead.firstName);
+  const lastName = toLower(lead.lastName);
+  const jobTitle = toLower(lead.jobTitle);
+  const company = safe(lead.company);
+  const country = safe(lead.country);
+  const ipCountry = safe(lead.ipCountry);
 
-  // Basic sanity: missing email = instant junk
+  let localPart = "";
+  let domain = "";
+
+  // Email checks (safe parsing)
   if (!email || !email.includes("@")) {
     reasons.push("Missing or invalid email");
   } else {
-    const [localPart, domain] = email.split("@");
+    const parts = email.split("@");
+    localPart = parts[0] || "";
+    domain = parts[1] || "";
 
     if (DISPOSABLE_DOMAINS.includes(domain)) {
       reasons.push("Disposable email domain");
@@ -71,30 +57,28 @@ function classifyLead(lead) {
     }
   }
 
-  // Job title
-  if (NON_BUSINESS_TITLES.includes(jobTitle)) {
+  // Job title checks (only if jobTitle exists)
+  if (jobTitle && NON_BUSINESS_TITLES.includes(jobTitle)) {
     reasons.push(`Non-business title: ${jobTitle}`);
   }
 
-  // Obvious test data
+  // First/Last/Test checks (only if fields exist)
   if (firstName === "test" || lastName === "test" || email.includes("test")) {
     reasons.push("Test data");
   }
 
-  // Country mismatch
+  // Country mismatch (only if both exist)
   if (country && ipCountry && country !== ipCountry) {
     reasons.push("Country does not match IP country");
   }
 
-  // Simple scoring: start at 1, subtract for each reason
+  // Scoring
   const baseScore = 1;
-  const penaltyPerReason = 0.2;
-  const score = Math.max(0, baseScore - reasons.length * penaltyPerReason);
-
-  const isJunk = reasons.length > 0;
+  const penalty = 0.2 * reasons.length;
+  const score = Math.max(0, baseScore - penalty);
 
   return {
-    isJunk,
+    isJunk: reasons.length > 0,
     reason: reasons.length ? reasons.join("; ") : "Looks valid",
     score
   };
@@ -108,7 +92,9 @@ app.get("/", (req, res) => {
 // Main classify endpoint
 app.post("/classify", (req, res) => {
   try {
+    // Even if body is missing entirely → still safe
     const lead = req.body || {};
+
     const result = classifyLead(lead);
 
     res.json({
